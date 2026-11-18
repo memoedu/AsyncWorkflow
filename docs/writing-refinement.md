@@ -1,6 +1,6 @@
 # 写作与非写作的正文整理
 
-普通单人录音先按原文确定整体去处。Document 有直接写作或非写作 tag 时跳过 Decision；没有预设类型时，由 `gpt-6-luna` 的 Decisions API 判断内容用途，再由 Responses API 按对应提示词整理。写作与非写作正文均使用已确认的 `gpt-6.1-sol`、中等推理。只有明确要求分割才生成多个独立记录，执行授权和多人会议整理保持原路径。
+普通单人录音先按原文确定整体去处。Document 有直接写作或非写作 tag 时跳过 Decision；没有预设类型时，由 `gpt-6-luna` 的 Decisions API 判断内容用途，再由 Responses API 按对应提示词整理。写作与非写作正文均使用已确认的 `gpt-6.2-sol`、中等推理。只有明确要求分割才生成多个独立记录，执行授权和多人会议整理保持原路径。
 
 | 内容 | 整理方式 |
 | --- | --- |
@@ -26,7 +26,7 @@
 
 ## 启用、记录与恢复
 
-仓库外的现有配置设置 `refinement_policy: "content_routed"`；`refinement_model`、`refinement_reasoning` 保留写作及未覆盖路线的默认值。`refinement_non_writing_model`、`refinement_non_writing_reasoning` 仅覆盖最终选定的非写作路线；未配置时继承默认值。当前确认配置中，默认 `refinement_model` / `refinement_reasoning` 与非写作覆盖项均设置为 `gpt-6.1-sol` / `medium`；Decisions 仍使用 Luna。低置信非写作判断回到写作保护时，也使用写作模型。`doctor` 的 `generation_profiles` 显示两条路线的实际设置。
+仓库外的现有配置设置 `refinement_policy: "content_routed"`；`refinement_model`、`refinement_reasoning` 保留写作及未覆盖路线的默认值。`refinement_non_writing_model`、`refinement_non_writing_reasoning` 仅覆盖最终选定的非写作路线；未配置时继承默认值。当前确认配置中，默认 `refinement_model` / `refinement_reasoning` 与非写作覆盖项均设置为 `gpt-6.2-sol` / `medium`；Decisions 仍使用 Luna。低置信非写作判断回到写作保护时，也使用写作模型。`doctor` 的 `generation_profiles` 显示两条路线的实际设置。
 
 初始默认 `legacy` 便于受控启用；凭据文件仍通过 `openai_env_file` 指定。密钥依次读取进程 `OPENAI_API_KEY`、`OPENAI_ENV_FILE` 指向的文件或配置中的共享文件；不写入仓库、不打印、不修改环境。
 
