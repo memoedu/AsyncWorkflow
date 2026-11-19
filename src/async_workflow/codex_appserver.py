@@ -15,6 +15,7 @@ from openai_codex.client import CodexClient
 from pydantic import BaseModel, ConfigDict
 
 from .core import Attention, UnknownOutcome, atomic, digest, now, read_json, resolve_codex_path
+from .markdown import parse_recording_outline
 
 
 def sdk_config(cfg, cwd: Path, *, via_wakewire: bool = False) -> CodexConfig:
@@ -61,7 +62,7 @@ def prompt_for(item: dict) -> str:
 
 
 def name_thread(thread, item, folder):
-    title = item.get('title') or item['markdown'].splitlines()[0].lstrip('# ').strip()[:60]
+    title = item.get('title') or parse_recording_outline(item['markdown'])['text'].strip()[:60]
     for delay in (0, .5, 1, 2, 4):
         if delay:
             sleep(delay)
@@ -82,7 +83,6 @@ def name_thread(thread, item, folder):
 
 def prepare_input(cfg, item, folder):
     from . import splitter
-    from .markdown import parse_outline
     signature=digest(item['raw_text'])
     path=folder/'input.json'
     saved=read_json(path)
@@ -93,7 +93,7 @@ def prepare_input(cfg, item, folder):
     if not body['content_text'].strip(): raise Attention('thread_task_body_missing')
     reusable=body.get('markdown') if ('content_text' in item or body['content_text']==item['raw_text']) else None
     markdown=reusable or splitter.refine(cfg,body['content_text'])
-    parse_outline(markdown)
+    parse_recording_outline(markdown)
     prepared={'content_text':body['content_text'],'control_spans':body.get('control_spans',[]),'markdown':markdown}
     atomic(path,{'source_hash':signature,'at':now(),'raw_text':item['raw_text'],'body':prepared})
     return {**item,**prepared}

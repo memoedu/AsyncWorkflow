@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from async_workflow.core import Settings, atomic, now, read_json
-from async_workflow.markdown import parse_outline
+from async_workflow.markdown import parse_recording_outline
 
 
 def compare(expected, actual):
@@ -35,7 +35,7 @@ def main():
         observed = read_json(args.snapshots / (effect['root_id'] + '.json'))
         assert observed['remId'] == effect['root_id']
         assert observed['parentRemId'] == effect['parent']
-        count = compare(parse_outline(segment['markdown']), observed)
+        count = compare(parse_recording_outline(segment['markdown']), observed)
         result = {'key': segment['key'], 'root_id': effect['root_id'],
                   'parent_id': effect['parent'], 'parent_title': observed.get('parentTitle'),
                   'outline_nodes_matched': count, 'content_only': True}

@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import httpx
 from .core import Attention, UnknownOutcome, atomic, digest, now
-from .markdown import parse_outline
+from .markdown import parse_recording_outline
 from .remnote_bridge import token_for
 from . import routing
 
@@ -100,7 +100,7 @@ async def publish(cfg, manifest, effect_key, markdown, requested, metadata, raw_
     if saved and saved.get('status')=='verified': return saved
     if saved and saved.get('backend')!='independent-remnote-plugin':
         raise UnknownOutcome('legacy_remnote_effect_requires_readback_before_migration')
-    tree=parse_outline(markdown) if markdown.strip() else None
+    tree=parse_recording_outline(markdown) if markdown.strip() else None
     async with connection(cfg) as session:
         if not saved:
             route=await routing.plan(cfg,session,call,requested,raw_text or markdown,manifest.read().get('provenance',{}),item=item)
