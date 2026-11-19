@@ -248,7 +248,7 @@ def refine(settings: Settings, text: str, *, preset: str = '') -> str:
     prompt_bytes = settings.prompt.read_bytes()
     if digest(prompt_bytes) != PROMPT_HASH:
         raise Attention("frozen_prompt_hash_mismatch")
-    from .markdown import parse_outline
+    from .markdown import compile_recording_outline
     from .core import atomic, now
     # Freeze the user's system prompt verbatim; quote source data in the user payload.
     messages=[{"role":"system","content":prompt_bytes.decode("utf-8-sig")},
@@ -259,8 +259,7 @@ def refine(settings: Settings, text: str, *, preset: str = '') -> str:
         value=response.choices[0].message.content or ""
         atomic(settings.root/'model-attempts'/(digest('refine'+text+value)+'.json'), {'operation':'refine','source':text,'response':value,'at':now()})
         try:
-            parse_outline(value)
-            return value
+            return compile_recording_outline(value)
         except ValueError as exc:
             if attempt==2:
                 raise Attention('outline_format_failed') from None

@@ -79,6 +79,8 @@ class FakeClient:
 
 def test_new_commands_use_sdk_and_preserve_ids_before_submission(setup, monkeypatch):
     cfg, store, item = setup
+    item = {**item, 'markdown': '- Calculate\n- Compare public figures'}
+    item.pop('title')
     sdk = FakeClient(store)
     monkeypatch.setattr(app, 'CodexClient', sdk)
     monkeypatch.setattr(executor.subprocess, 'Popen', lambda *a, **k:pytest.fail('Exec launched'))
@@ -89,6 +91,7 @@ def test_new_commands_use_sdk_and_preserve_ids_before_submission(setup, monkeypa
     assert result['session_id'] == 'native-thread' and result['turn_id'] == 'native-turn'
     assert result['status'] == 'completed_unverified'
     assert sdk.inputs == [item['markdown']]
+    assert sdk.names == ['Calculate']
     assert result['result']['summary'].startswith('建议先比较维护成本。')
     assert executor.execute(cfg, store, 'key', item) == store.effect('key')
     assert sdk.created == sdk.submitted == 1

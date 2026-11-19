@@ -4,7 +4,7 @@ import pytest
 
 from async_workflow.core import Settings, Manifest, eligibility, recorded_time, safe_source, file_hash, Attention, UnknownOutcome
 from async_workflow.splitter import VoiceDumpSplitResult, validate_split, units
-from async_workflow.markdown import parse_outline
+from async_workflow.markdown import compile_recording_outline, parse_outline, parse_recording_outline
 from async_workflow.executor import execute
 
 
@@ -112,13 +112,20 @@ def test_knowledge_routing_not_executor():
 
 def test_markdown_title_only_and_nested():
     assert parse_outline("# 单一观点")["children"]==[]
-    tree=parse_outline("# 想法\n- 原因\n  - 例子 $x^2$ → 结果\n- 限制 :: 条件")
+    heading = "# 想法\n- 原因\n  - 例子 $x^2$ → 结果\n- 限制 :: 条件"
+    tree = parse_outline(heading)
     assert tree["children"][0]["children"][0]["text"]=="例子 $x^2$ → 结果"
+    bullet = compile_recording_outline(heading)
+    assert bullet == "- " + heading[2:]
+    assert parse_recording_outline(bullet) == parse_recording_outline(heading) == tree
+    assert compile_recording_outline("# 单一观点") == "- 单一观点"
+    assert parse_recording_outline("- 单一观点") == parse_outline("# 单一观点")
 
 
 @pytest.mark.parametrize("text",["plain", "# 标题\n段落", "# 标题\n- ", "# 标题\n```python\nx=1\n```"])
 def test_bad_markdown_rejected(text):
     with pytest.raises(ValueError): parse_outline(text)
+    with pytest.raises(ValueError): compile_recording_outline(text)
 
 
 def test_unknown_command_never_relaunches(cfg,monkeypatch):

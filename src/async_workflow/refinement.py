@@ -13,13 +13,14 @@ import time
 from filelock import FileLock
 
 from .core import Attention, atomic, digest, now, read_json
-from .markdown import parse_outline
+from .markdown import compile_recording_outline
 
 VERSION = 'writing-aware-openai-v1'
 DECISION_MODEL = 'gpt-6-luna'
 MIN_NON_WRITING_CONFIDENCE = 0.75
 MAX_OUTPUT_TOKENS = 32768
 PROMPTS = Path(__file__).with_name('prompts')
+QUOTATION_STYLE = 'refine-quotation-style.md'
 CHOICES = [
     {'value': 'writing', 'description': '已有表达性正文，须保留自然表述与风格；含实质写作的混合输入也选此项。'},
     {'value': 'non_writing', 'description': '纯任务、需求、步骤、约束、清单或事实条目，可做结构化整理。'},
@@ -56,7 +57,7 @@ def identity(cfg):
                              'non_writing_generation': generation_settings(cfg, 'non_writing'),
                              'max_output_tokens': MAX_OUTPUT_TOKENS,
                              'prompts': {name: prompt(name) for name in
-                                 ('refine-common.md', 'refine-writing.md', 'refine-non-writing.md')}},
+                                 ('refine-common.md', 'refine-writing.md', 'refine-non-writing.md', QUOTATION_STYLE)}},
                             ensure_ascii=False, sort_keys=True))
 
 
@@ -97,7 +98,7 @@ def writing_instructions(*, dictation=False):
         if not marker or not formatting.strip():
             raise Attention('refinement_format_boundary_missing')
         formatting = '输出格式：\n' + formatting
-    return prompt('refine-writing.md') + '\n\n' + formatting
+    return '\n\n'.join((prompt('refine-writing.md'), formatting, prompt(QUOTATION_STYLE)))
 
 
 def request(cfg, endpoint, payload):
@@ -233,8 +234,7 @@ def generate(cfg, text, instructions, *, route, decision_receipt=None):
             raise Attention('refinement_generation_model_mismatch')
         value = output_text(raw)
         try:
-            parse_outline(value)
-            return value
+            return compile_recording_outline(value)
         except ValueError:
             if attempt == 2:
                 raise Attention('outline_format_failed') from None
@@ -251,5 +251,5 @@ def refine(cfg, text, *, preset=''):
     if decision['route'] == 'writing':
         instructions = writing_instructions()
     else:
-        instructions = prompt('refine-non-writing.md')
+        instructions = '\n\n'.join((prompt('refine-non-writing.md'), prompt(QUOTATION_STYLE)))
     return generate(cfg, text, instructions, route=decision['route'], decision_receipt=decision['receipt'])

@@ -28,9 +28,8 @@ DEADLINE_SECONDS = 27
 def instructions(route):
     if route == 'writing':
         return policy.writing_instructions(dictation=True)
-    else:
-        rules = policy.prompt('refine-dictation-non-writing.md')
-    return rules + '\n\n' + policy.prompt('refine-dictation-format.md')
+    return '\n\n'.join((policy.prompt('refine-dictation-non-writing.md'),
+                        policy.prompt('refine-dictation-format.md'), policy.prompt(policy.QUOTATION_STYLE)))
 
 
 def identity(cfg):

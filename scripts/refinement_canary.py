@@ -11,6 +11,7 @@ import time
 
 from async_workflow.core import Settings, atomic, digest, read_json
 from async_workflow import refinement as r, splitter
+from async_workflow.markdown import parse_recording_outline
 
 
 def run_case(base, output, case):
@@ -67,7 +68,8 @@ def write_report(summary, output):
              '- 混合内容、不确定内容和低置信非写作判断：优先保护写作。', '',
              '## 完整提示词', '']
     for name, title in [('decide-writing.md', 'Luna 决策'), ('refine-common.md', '共同保真与格式规则'),
-                        ('refine-non-writing.md', '非写作整理'), ('refine-writing.md', '写作整理')]:
+                        ('refine-non-writing.md', '非写作整理'), ('refine-writing.md', '写作整理'),
+                        (r.QUOTATION_STYLE, '共用引号样式')]:
         lines += ['### ' + title, '', r.prompt(name).strip(), '']
     lines += ['## 决策结果', '', '| 输入 | 预期 | 模型选择 | 实际路线 |', '| --- | --- | --- | --- |']
     for item in summary['results']:
@@ -78,7 +80,7 @@ def write_report(summary, output):
         lines.append(f"| {excerpt} | {labels[item['expected_route']]} | {labels[item['decision']['choice']]} | {labels[item['decision']['route']]} |")
     lines += ['', '## 实际整理结果', '']
     for index, item in enumerate((v for v in summary['results'] if 'output' in v), 1):
-        title = item['output'].splitlines()[0].lstrip('# ').strip()
+        title = parse_recording_outline(item['output'])['text']
         lines += [f"### {index}. {title}（{labels[item['decision']['route']]}）", '', '原文：', '',
                   '> ' + item['source'], '']
         if item.get('baseline'):

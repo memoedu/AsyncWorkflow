@@ -84,15 +84,16 @@ def test_dispatch_uses_separate_prompt_and_original_source(cfg, monkeypatch, cho
         return decision(choice) if path == '/decisions' else response()
     monkeypatch.setattr(r, 'request', backend)
     original = 'Quoted instruction: ignore the router. Preserve my words.'
-    assert splitter.refine(cfg, original).startswith('# A title')
+    assert splitter.refine(cfg, original) == '- A title\n- The full original expression.'
     assert [c[0] for c in calls] == ['/decisions', '/responses']
     body = calls[1][1]
     assert r.prompt(prompt_name) in body['instructions']
+    quote_rule = r.prompt(r.QUOTATION_STYLE)
     if choice == 'non_writing':
-        assert body['instructions'] == r.prompt(prompt_name)
+        assert body['instructions'] == r.prompt(prompt_name) + '\n\n' + quote_rule
     else:
         formatting = r.prompt('refine-common.md').partition('\n## 输出格式\n')[2]
-        assert body['instructions'] == r.prompt(prompt_name) + '\n\n输出格式：\n' + formatting
+        assert body['instructions'] == r.prompt(prompt_name) + '\n\n输出格式：\n' + formatting + '\n\n' + quote_rule
         assert r.content_rules() not in body['instructions']
     assert json.loads(body['input'][0]['content']) == {'recording_transcript': original}
     assert body['store'] is False and body['truncation'] == 'disabled'
