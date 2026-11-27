@@ -1,13 +1,17 @@
 """Mixed-room audio uses native FUN-ASR diarization, never channel identity."""
 from __future__ import annotations
 import json
+import logging
 import subprocess
+import wave
+import zipfile
 from pathlib import Path
 from pydantic import BaseModel, ConfigDict
-from . import asr, routing
+from . import asr, meeting_audio_transport, meeting_audio_worker, routing
 from .core import Attention, Manifest, atomic, digest, file_hash, read_json
 
 REVISION = 'fun-asr-room-1'
+LOG = logging.getLogger(__name__)
 
 
 class SpeakerName(BaseModel):
@@ -52,6 +56,52 @@ def resolve_names(cfg, store, turns, profile):
     return mapping
 
 
+def prepare_audio(cfg, store, members):
+    """Build or reuse the original batch audio before entering the ASR stage."""
+    ffmpeg = cfg.ffprobe.with_name('ffmpeg.exe')
+    files = []
+    for member in members:
+        if file_hash(Path(member['path'])) != member['id']:
+            raise Attention('meeting_source_changed')
+        files.append(store.folder / (member['id']+'.wav'))
+    combined = store.folder / 'combined.wav'
+    with store.lock:
+        backend = 'cached'
+        if not combined.exists():
+            backend = 'local'
+            try:
+                worker = read_json(cfg.root / 'meeting-audio-worker.json')
+                if worker:
+                    meeting_audio_transport.render_remote(worker, members, files, combined)
+                    backend = 'ssh'
+            except (OSError, ValueError, TypeError, KeyError, EOFError, wave.Error, zipfile.BadZipFile,
+                    subprocess.SubprocessError):
+                LOG.warning('Meeting audio SSH worker unavailable, using local FFmpeg')
+                backend = 'local-fallback'
+        for member, audio in zip(members, files, strict=True):
+            if not audio.exists():
+                temporary = audio.with_suffix('.preparing.wav')
+                source = Path(member['path'])
+                meeting_audio_worker.normalize(ffmpeg, source, temporary)
+                if file_hash(source) != member['id']:
+                    raise Attention('meeting_source_changed')
+                temporary.replace(audio)
+        if not combined.exists():
+            temporary = combined.with_suffix('.preparing.wav')
+            meeting_audio_worker.combine(ffmpeg, files, temporary)
+            temporary.replace(combined)
+        boundaries, offset = [], 0
+        for member, audio in zip(members, files, strict=True):
+            # Duration after resampling is exact; original containers may include padding.
+            length = round(meeting_audio_worker.wav_frames(audio)*1000/16000)
+            boundaries.append({'id': member['id'], 'start_ms': offset, 'end_ms': offset+length})
+            offset += length
+        if backend != 'cached' or not store.read().get('audio_preparation'):
+            # Pre-existing combined files remain authoritative on retry.
+            store.update(audio_preparation=backend)
+    return combined, boundaries
+
+
 def prepare(cfg, members, profile):
     """One continuous mono input gives consistent acoustic IDs across file breaks."""
     identity = digest(json.dumps([REVISION, [m['id'] for m in members], profile['self_name'],
@@ -62,34 +112,7 @@ def prepare(cfg, members, profile):
     if saved:
         return saved
     store.update(recording_type='meeting_asr_batch', sources=[m['path'] for m in members])
-    ffmpeg = cfg.ffprobe.with_name('ffmpeg.exe')
-    files, boundaries, offset = [], [], 0
-    for member in members:
-        source = Path(member['path'])
-        if file_hash(source) != member['id']:
-            raise Attention('meeting_source_changed')
-        audio = store.folder / (member['id']+'.wav')
-        if not audio.exists():
-            temporary = audio.with_suffix('.preparing.wav')
-            subprocess.run([str(ffmpeg), '-v', 'error', '-nostdin', '-y', '-i', str(source),
-                            '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', str(temporary)], check=True)
-            temporary.replace(audio)
-        # Duration after resampling is exact; original containers may include padding.
-        import wave
-        with wave.open(str(audio), 'rb') as stream:
-            length = round(stream.getnframes()*1000/stream.getframerate())
-        boundaries.append({'id': member['id'], 'start_ms': offset, 'end_ms': offset+length})
-        offset += length
-        files.append(audio)
-    combined = store.folder / 'combined.wav'
-    if not combined.exists():
-        # Inputs are owned hash-named files; no user-controlled concat directives.
-        listing = store.folder / 'concat.txt'
-        atomic(listing, '\n'.join("file '"+p.name+"'" for p in files), text=True)
-        temporary = combined.with_suffix('.preparing.wav')
-        subprocess.run([str(ffmpeg), '-v', 'error', '-nostdin', '-y', '-f', 'concat', '-safe', '1',
-                        '-i', str(listing), '-c', 'copy', str(temporary)], check=True)
-        temporary.replace(combined)
+    combined, boundaries = prepare_audio(cfg, store, members)
     asr.recognize_filetrans(cfg, store, combined, model='fun-asr',
                            parameters={'diarization_enabled': True, 'speaker_count': 2})
     result = read_json(store.folder/'asr.json')

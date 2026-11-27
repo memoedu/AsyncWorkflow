@@ -48,6 +48,19 @@
 - 完整结果已落地的录音直接跳过，不补跑新分类、不重新转写或重复归档。
 - 日会议按对象、日期及有序源音频哈希去重；文件改名不生成第二份结果。新增同日文件更新这一份日会议，新结果回读成功后旧整体移到 Trash，保留恢复收据。普通日期录音的历史基线和启用时间不重置；自动扫描仍为半小时一次。
 - `python -m async_workflow.cli meetings` 查看已同步匹配分组；加 `--run` 执行全部，或用 `--contact`、`--day` 选择分组。命令和自动扫描共用同一原生 Prefect 流程。
+- 现场分离模式可在 Windows 运行根目录另设 `meeting-audio-worker.json`，将封存成员的 FFmpeg 解码、单声道 16 kHz PCM16 及按原顺序合并交给同一用户控制的 SSH 主机。使用目标主机的已验证 SSH 别名和主机密钥。以下为配置结构，路径按目标机器填写。
+
+  ```json
+  {
+    "host": "mac-audio-worker",
+    "python": "/absolute/path/to/python3",
+    "script": "/absolute/path/to/meeting_audio_worker.py",
+    "ffmpeg": "/absolute/path/to/ffmpeg",
+    "scratch": "/absolute/private/cache/directory"
+  }
+  ```
+
+  `script` 使用同一源码版的 `src/async_workflow/meeting_audio_worker.py`，目标机需要 Python 3.9+、FFmpeg 和已存在的私有临时目录。SSH 传输原录音或已生成的成员 WAV，按 SHA-256 标识排序。Windows 校验回传的 PCM 格式、帧数和拼接顺序，写入原批次目录。SSH 出错或回执不合格时使用原本机 FFmpeg。删除该可选配置可恢复全程本机计算，新批次读取配置，无需重启 runner。双声道通话、普通录音、任务提交、转写及归档继续走原入口。
 - 用户明确要求交流录音重跑时，使用 `repair <recording_id> --from meeting`；仅首次补齐缺少的声道转写，后续复用。新结果核验成功后由独立插件将旧整体及空行移入 Trash，保留旧节点 ID 与恢复收据，不覆盖旧内容。
 - 已有原生任务正在运行、暂停或等待时沿用该任务。失败或崩溃时重试同一个原生任务，保留已确认的外部动作回执。
 - 部分完成复用已有转写、类型判断、结构化正文、分块与成功归档；只推进缺失或失败环节。
