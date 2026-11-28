@@ -95,6 +95,8 @@ Prefect 的 server、runner、watcher 使用计划任务优先级 4（普通 CPU
 
 后台代码重载使用 `pwsh -NoProfile -File scripts/restart-services.ps1 -Roles runner,watcher`。它先确认无正在执行的 flow，再对准确服务进程树停止和重启，并核对 PID 创建时间；直接停止 headless conhost 的计划任务可能留下占锁的旧 Python 进程，后续子进程会因控制台失效而崩溃。该脚本只管理本流程后台服务。
 
+Prefect server 可以沿原 Windows 回环地址对接单台 Mac 的原版实例。原 server 任务读取本地 `prefect-server-owner.json`，以 `{"owner":"mac","ssh_host":"已固定主机密钥的别名"}` 和原库下的 `cutover-frozen` 同时存在为条件启动可重连的 OpenSSH 转发。缺少切换配置时沿用本机 server，冻结标记保留时拒绝重开本机库。Mac 用 `scripts/run-prefect-server-mac.sh` 接入现有用户的 launchd，启动前查验本机所有权标记与已恢复的数据库。原 Windows runner 与 watcher 继续使用同一个 4200 地址。交接用 `scripts/prefect-state-transfer.py` 核对冻结文件组并以 SQLite Backup API 生成独立库。同一时刻仅启用一侧的数据库写入；接收侧写入后的回退应先排空并保留最新提交。
+
 现有 Windows 任务可使用 `scripts/service-task-action.ps1` 提供的新启动动作。它复用
 `DeveloperGovernance/run-hidden.pyw` 的 Windows Job Object，再用原虚拟环境运行单个服务角色。
 原 `service-<角色>.lock` 独占文件、Prefect 健康等待、日志路径和实际退出码继续使用。
