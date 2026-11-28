@@ -7,16 +7,20 @@ from __future__ import annotations
 import base64
 import fnmatch
 import json
+import logging
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 import httpx
+from . import meeting_audio_transport, meeting_audio_worker
 from .auth import access, require
 from .core import Attention, UnknownOutcome, atomic, digest, file_hash, read_json, now
 
 REVISION = 'channel-words-1'
 URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+LOG = logging.getLogger(__name__)
 
 
 def profile(cfg, name):
@@ -179,6 +183,53 @@ def turns_from_words(words):
     return [{'id':i,**t} for i,t in enumerate(sorted(turns,key=lambda t:(t['start_ms'],t['channel'])))]
 
 
+def prepared_chunks(store, duration):
+    window = meeting_audio_worker.CHANNEL_SECONDS
+    for channel in (0, 1):
+        for offset in range(0, int(duration) + 1, window):
+            length = min(float(window), duration - offset)
+            if length > 0:
+                yield channel, offset, length, store.folder/'conversation-channels'/f'{channel}-{offset:06d}'/'audio.mp3'
+
+
+def protected_chunk(folder):
+    if (folder/'receipt.json').exists():
+        return 'bound'
+    state = read_json(folder/'state.json', {})
+    if state.get('submission') == 'unknown':
+        return 'unknown'
+    if (state.get('submission') == 'completed' or state.get('audio_sha256')
+            or (folder/'shared-asr'/'raw.json').exists()):
+        return 'bound'
+    return None
+
+
+def offload_chunks(cfg, store, source, identity, chunks):
+    with store.lock:
+        if all(audio.exists() for _, _, _, audio in chunks):
+            return
+        try:
+            worker = read_json(cfg.root/'meeting-audio-worker.json')
+            if not worker or worker.get('stereo_chunks') is not True:
+                return
+            missing = []
+            for job in chunks:
+                _, _, _, audio = job
+                exists = audio.exists()
+                protected = protected_chunk(audio.parent)
+                if protected == 'unknown' or (protected and not exists):
+                    break
+                if not exists:
+                    missing.append(job)
+            if not missing:
+                return
+            meeting_audio_transport.render_channels(worker, source, identity, missing, cfg.ffprobe, store.folder)
+            store.update(channel_audio_preparation={'backend': 'ssh', 'chunks': len(missing)})
+        except (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile, subprocess.SubprocessError):
+            LOG.warning('Conversation audio SSH worker unavailable, using local FFmpeg')
+            store.update(channel_audio_preparation={'backend': 'local-fallback'})
+
+
 def recognize(cfg, store, source):
     speakers = profile(cfg, source.name)
     identity = file_hash(source)
@@ -200,24 +251,26 @@ def recognize(cfg, store, source):
     ffmpeg = cfg.ffprobe.with_name('ffmpeg.exe')
     words, receipts = [], []
     # Chunk caches are independent of nickname/output revisions.
-    for channel in (0,1):
-        for offset in range(0, int(duration)+1, 299):
-            length = min(299., duration-offset)
-            if length <= 0:
-                continue
-            chunk = store.folder/'conversation-channels'/f'{channel}-{offset:06d}'
+    chunks = list(prepared_chunks(store, duration))
+    offload_chunks(cfg, store, source, identity, chunks)
+    for channel, offset, length, audio in chunks:
+        chunk = audio.parent
+        with store.lock:
             chunk.mkdir(parents=True, exist_ok=True)
-            audio = chunk/'audio.mp3'
             if not audio.exists():
+                protected = protected_chunk(chunk)
+                if protected == 'unknown':
+                    raise UnknownOutcome('conversation_asr_submission_unknown_no_replay')
+                if protected:
+                    raise Attention('conversation_asr_receipt_mismatch')
                 prepared = chunk/'preparing.mp3'
-                subprocess.run([str(ffmpeg),'-v','error','-y','-ss',str(offset),'-i',str(source),'-t',str(length),
-                                '-af',f'pan=mono|c0=c{channel}','-ar','16000','-b:a','64k',str(prepared)],check=True)
+                meeting_audio_worker.encode_channel(ffmpeg, source, prepared, channel, offset, length)
                 prepared.replace(audio)
-            receipt = chunk_receipt(cfg,audio,chunk)
-            for word in words_from_receipt(receipt):
-                words.append({**word,'start_ms':word['start_ms']+offset*1000,'end_ms':word['end_ms']+offset*1000,
-                              'channel':channel,'speaker':speakers[str(channel)]})
-            receipts.append(str(chunk/'receipt.json'))
+        receipt = chunk_receipt(cfg,audio,chunk)
+        for word in words_from_receipt(receipt):
+            words.append({**word,'start_ms':word['start_ms']+offset*1000,'end_ms':word['end_ms']+offset*1000,
+                          'channel':channel,'speaker':speakers[str(channel)]})
+        receipts.append(str(chunk/'receipt.json'))
     if not words:
         raise Attention('conversation_empty_transcript')
     if file_hash(source)!=identity:

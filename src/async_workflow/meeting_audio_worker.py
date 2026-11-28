@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -12,6 +13,60 @@ import tempfile
 import wave
 import zipfile
 from pathlib import Path
+
+
+CHANNEL_SECONDS = 299
+
+
+def encode_channel(ffmpeg, source, output, channel, offset, length):
+    subprocess.run([str(ffmpeg), '-v', 'error', '-nostdin', '-y', '-ss', str(offset),
+                    '-protocol_whitelist', 'file', '-i', str(source), '-t', str(length),
+                    '-af', f'pan=mono|c0=c{channel}', '-ar', '16000', '-b:a', '64k', str(output)], check=True)
+
+
+def channel_name(channel, offset):
+    return f'{channel}-{offset:06d}.mp3'
+
+
+def sha256(path):
+    checksum = hashlib.sha256()
+    with path.open('rb') as stream:
+        while chunk := stream.read(1024 * 1024):
+            checksum.update(chunk)
+    return checksum.hexdigest()
+
+
+def run_channel_worker(ffmpeg, folder, stdin, stdout):
+    request = folder / 'request.zip'
+    source = folder / 'recording.source'
+    with request.open('wb') as stream:
+        shutil.copyfileobj(stdin, stream, length=1024 * 1024)
+    with zipfile.ZipFile(request) as archive:
+        if (len(archive.infolist()) != 2 or set(archive.namelist()) != {'channels.json', source.name}
+                or archive.getinfo('channels.json').file_size > 256 * 1024):
+            raise ValueError('unexpected channel input')
+        manifest = json.loads(archive.read('channels.json'))
+        identity, jobs = manifest['source_sha256'], manifest['jobs']
+        if (not re.fullmatch(r'[0-9a-f]{64}', identity) or not jobs
+                or any(type(channel) is not int or channel not in (0, 1)
+                       or type(offset) is not int or offset < 0 or offset % CHANNEL_SECONDS
+                       or not math.isfinite(length) or not 0 < length <= CHANNEL_SECONDS
+                       for channel, offset, length in jobs)
+                or len({(channel, offset) for channel, offset, _ in jobs}) != len(jobs)):
+            raise ValueError('invalid channel request')
+        unpack(archive, source.name, source)
+    request.unlink()
+    if sha256(source) != identity:
+        raise ValueError('channel source fingerprint differs')
+    outputs = {}
+    for channel, offset, length in jobs:
+        output = folder / channel_name(channel, offset)
+        encode_channel(ffmpeg, source, output, channel, offset, length)
+        outputs[output.name] = sha256(output)
+    with zipfile.ZipFile(stdout, 'w') as response:
+        response.writestr('channels.json', json.dumps({**manifest, 'outputs': outputs}))
+        for name in outputs:
+            response.write(folder / name, name)
 
 
 def normalize(ffmpeg, source, output):
@@ -69,11 +124,7 @@ def run_worker(ffmpeg, folder, stdin, stdout):
             unpack(archive, name, incoming)
             audio = folder / (identity + '.wav')
             if name.endswith('.source'):
-                checksum = hashlib.sha256()
-                with incoming.open('rb') as stream:
-                    while chunk := stream.read(1024 * 1024):
-                        checksum.update(chunk)
-                if checksum.hexdigest() != identity:
+                if sha256(incoming) != identity:
                     raise ValueError('meeting source fingerprint differs')
                 normalize(ffmpeg, incoming, audio)
                 incoming.unlink()
@@ -93,9 +144,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('ffmpeg', type=Path)
     parser.add_argument('scratch', type=Path)
+    parser.add_argument('--channels', action='store_true')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='meeting-', dir=args.scratch) as temporary:
-        run_worker(args.ffmpeg, Path(temporary), sys.stdin.buffer, sys.stdout.buffer)
+        worker = run_channel_worker if args.channels else run_worker
+        worker(args.ffmpeg, Path(temporary), sys.stdin.buffer, sys.stdout.buffer)
 
 
 if __name__ == '__main__':
