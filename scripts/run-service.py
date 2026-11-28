@@ -4,8 +4,10 @@ from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from datetime import datetime
+import json
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import sys
@@ -84,6 +86,35 @@ def attach_stdio(output):
     sys.stdout = sys.stderr = output
 
 
+def prefect_server_host(runtime):
+    config = runtime / 'prefect-server-owner.json'
+    frozen = runtime / 'prefect' / 'cutover-frozen'
+    owner = json.loads(config.read_text(encoding='utf-8')) if config.exists() else {'owner': 'windows'}
+    if owner == {'owner': 'windows'} and not frozen.exists():
+        return None
+    if owner == {'owner': 'frozen'}:
+        raise RuntimeError('Prefect ownership transfer is in progress')
+    if isinstance(owner, dict) and set(owner) == {'owner', 'ssh_host'} and owner['owner'] == 'mac':
+        host = owner['ssh_host']
+        if frozen.is_file() and isinstance(host, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', host):
+            return host
+    raise RuntimeError('Invalid Prefect ownership configuration')
+
+
+def run_prefect_tunnel(host, output, port=4200):
+    # The child stays in the existing scheduler Job Object.
+    command = [str(Path(os.environ['SystemRoot']) / 'System32' / 'OpenSSH' / 'ssh.exe'), '-N', '-T']
+    for option in ('BatchMode=yes', 'StrictHostKeyChecking=yes', 'ExitOnForwardFailure=yes',
+                   'ConnectTimeout=10', 'ServerAliveInterval=10', 'ServerAliveCountMax=2',
+                   'ControlMaster=no', 'ControlPath=none'):
+        command.extend(('-o', option))
+    command.extend(('-L', f'127.0.0.1:{port}:127.0.0.1:{port}', host))
+    while True:
+        child = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+        print(f'Prefect SSH forwarding exited {child.returncode}. Reconnecting.', file=output, flush=True)
+        time.sleep(2)
+
+
 def run_service(role, runtime, temporary, output):
     if role == 'xiaomi':
         os.environ.update(SERVER_PORT='43140', APP_DB_PATH=str(runtime/'xiaomi'/'xiaomi.db'))
@@ -92,6 +123,9 @@ def run_service(role, runtime, temporary, output):
             '-server.host=127.0.0.1', '-Dorg.sqlite.tmpdir=' + str(temporary),
         ], cwd=runtime/'xiaomi', stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT).returncode
     if role == 'server':
+        host = prefect_server_host(runtime)
+        if host:
+            return run_prefect_tunnel(host, output)
         from prefect.cli import app
         sys.argv = ['prefect', 'server', 'start', '--host', '127.0.0.1', '--port', '4200']
         app()

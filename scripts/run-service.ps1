@@ -15,6 +15,13 @@ Set-Location -LiteralPath $projectRoot
 $python="$projectRoot\.venv\Scripts\python.exe"
 $lockFile="$runtimeRoot\locks\service-$Role.lock"
 try { $lease=[System.IO.File]::Open($lockFile,'OpenOrCreate','ReadWrite','None') } catch { exit 0 }
+if($Role -eq 'server') {
+  $ownerPath=Join-Path $runtimeRoot 'prefect-server-owner.json'
+  if((Test-Path -LiteralPath "$env:PREFECT_HOME\cutover-frozen") -or
+     ((Test-Path -LiteralPath $ownerPath) -and (Get-Content -LiteralPath $ownerPath -Raw | ConvertFrom-Json).owner -ne 'windows')) {
+    throw 'The Windows Prefect database is fenced; use the active server task action.'
+  }
+}
 if($Role -in @('runner','watcher')) {
   $ready=$false
   for($attempt=0;$attempt -lt 45;$attempt++) {
