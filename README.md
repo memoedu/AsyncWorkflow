@@ -95,6 +95,12 @@ Prefect 的 server、runner、watcher 使用计划任务优先级 4（普通 CPU
 
 后台代码重载使用 `pwsh -NoProfile -File scripts/restart-services.ps1 -Roles runner,watcher`。它先确认无正在执行的 flow，再对准确服务进程树停止和重启，并核对 PID 创建时间；直接停止 headless conhost 的计划任务可能留下占锁的旧 Python 进程，后续子进程会因控制台失效而崩溃。该脚本只管理本流程后台服务。
 
+现有 Windows 任务可使用 `scripts/service-task-action.ps1` 提供的新启动动作。它复用
+`DeveloperGovernance/run-hidden.pyw` 的 Windows Job Object，再用原虚拟环境运行单个服务角色。
+原 `service-<角色>.lock` 独占文件、Prefect 健康等待、日志路径和实际退出码继续使用。
+可以只更新原任务的 Action，在其下次启动加载新入口。`run-service.ps1` 保留给旧动作回退，
+`restart-services.ps1` 能识别两种进程树。
+
 恢复扫描随 watcher 启动立即运行，此后每 30 分钟运行：所有失败和崩溃均沿用原 Prefect flow 持续重试，不设三次上限。一条损坏记录或查询失败不阻塞其他录音；机器依赖和插件重连在条件就绪后恢复。卡在运行/提交中的任务只在等待超过一个周期、并确认本地工作进程不存在时恢复。`recovery-status.json` 保存最近检查、重试和错误，页面每 30 秒刷新显示。人工待答保持待答，未知 Thread/笔记提交自动核对原收据，不重复执行副作用。
 
 FUN-ASR 的已退出失败进程可持续重试；活进程不并发重启，超过一小时且 PID、命令和录音身份核对一致的子进程才会终止后重试。原输出和尝试历史保留，新尝试使用独立输出位置。成功分片保存在 `funasr-chunks`，完整源绑定回执可离线恢复最终转写；仅服务明确返回 `ASR_RESPONSE_HAVE_NO_WORDS` 且没有文字事件时接受空片，整段无文字仍报错。已接受的转写不重新上传。

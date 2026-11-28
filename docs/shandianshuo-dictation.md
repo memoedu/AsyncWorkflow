@@ -26,7 +26,7 @@
 
 该服务单独运行，不重启录音 runner，不引入新的录音、ASR、桌面输入或归档流程。`GET /health` 可读取服务版本与策略指纹。
 
-计划任务只保存稳定的 PowerShell 7 入口（独立安装路径或未带版本号的托管运行时入口），不使用当前 Codex 进程解析出的版本包路径。dictation 复用 `DeveloperGovernance/run-hidden.pyw` 隐藏启动并传递实际退出码；启动器用虚拟环境记录的基础 Python 解释器，PowerShell 用真实可执行文件，避免应用执行别名和虚拟环境跳板使子进程脱离 Windows job。停止任务时一并结束其子进程；输出保存在 `logs/dictation.output.log`。登录触发之外，同一个任务每分钟补启动一次，配合 `IgnoreNew` 和服务独占锁恢复已退出的服务，不另设 watchdog。正常运行的服务不会因此重启。
+计划任务使用虚拟环境记录的基础 `pythonw.exe` 启动 `DeveloperGovernance/run-hidden.pyw`。服务入口使用原虚拟环境、独占锁和日志路径。Windows Job Object 回收子进程并传递实际退出码。输出保存在 `logs/dictation.output.log`。登录触发之外，同一个任务每分钟补启动一次，配合 `IgnoreNew` 和服务独占锁恢复已退出的服务。正常运行的服务不会因此重启。
 
 ## 配置与验收
 
