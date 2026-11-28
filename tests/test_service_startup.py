@@ -12,18 +12,16 @@ INSTALLER = Path(__file__).parents[1] / 'scripts/install-startup.ps1'
 pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Windows task installer')
 
 
-def registration(tmp_path, available):
-    # Simulate different installation layouts, including a Codex process whose
-    # Get-Command would resolve to a disposable versioned package.
+def registration(tmp_path, role, missing=''):
     fixture = tmp_path / 'register.ps1'
     fixture.write_text(r'''
 $ErrorActionPreference='Stop'
 function Test-Path {
   param($LiteralPath,$PathType)
-  if($LiteralPath -eq 'D:\SyntheticPython\pythonw.exe' -or $LiteralPath -like '*\run-hidden.pyw'){return $true}
-  if($LiteralPath -like '*\PowerShell\7\pwsh.exe'){return AVAILABLE -eq 'standalone'}
-  if($LiteralPath -like '*\Microsoft\WindowsApps\pwsh.exe'){return AVAILABLE -eq 'alias'}
-  if($LiteralPath -like '*\.cache\codex-runtimes\*'){return AVAILABLE -eq 'cache'}
+  if($LiteralPath -eq 'D:\SyntheticPython\pythonw.exe'){return MISSING -ne 'base'}
+  if($LiteralPath -like '*\run-hidden.pyw'){return MISSING -ne 'launcher'}
+  if($LiteralPath -like '*\.venv\Scripts\python.exe'){return MISSING -ne 'runtime'}
+  if($LiteralPath -like '*\run-service.py'){return MISSING -ne 'service'}
   return $false
 }
 function Get-Content {param($LiteralPath); return 'home = D:\SyntheticPython'}
@@ -47,33 +45,35 @@ function Register-ScheduledTask {
   $global:result=@{action=$Action;triggers=$Trigger;settings=$Settings}
 }
 function Get-ScheduledTask {param($TaskName)}
-& INSTALLER -Roles dictation
+& INSTALLER -Roles ROLE
 $global:result | ConvertTo-Json -Depth 6 -Compress
-'''.replace('AVAILABLE', "'" + available + "'")
+'''.replace('MISSING', "'" + missing + "'").replace('-Roles ROLE', "-Roles '" + role + "'")
        .replace('INSTALLER', "'" + str(INSTALLER) + "'"), encoding='utf-8')
     return subprocess.run([shutil.which('pwsh'), '-NoLogo', '-NoProfile', '-File', str(fixture)],
                           capture_output=True, text=True, timeout=30)
 
 
-@pytest.mark.parametrize('available,expected', [
-    ('standalone', r'PowerShell\7\pwsh.exe'),
-    ('cache', r'.cache\codex-runtimes\codex-primary-runtime'),
+@pytest.mark.parametrize('role,priority', [
+    ('dictation', 7), ('runner', 4), ('dashboard', 7),
 ])
-def test_dictation_uses_stable_host_and_native_recovery(tmp_path, available, expected):
-    process = registration(tmp_path, available)
+def test_tasks_use_native_job_host_and_preserve_trigger_contract(tmp_path, role, priority):
+    process = registration(tmp_path, role)
     assert process.returncode == 0, process.stderr
     task = json.loads(process.stdout)
     assert task['action']['execute'] == r'D:\SyntheticPython\pythonw.exe'
     assert 'run-hidden.pyw" --no-timeout -- "' in task['action']['arguments']
-    assert expected in task['action']['arguments']
-    assert 'OpenAI.CodexPrimaryRuntime.v' not in task['action']['arguments']
+    assert r'.venv\Scripts\python.exe' in task['action']['arguments']
+    assert f'run-service.py" --role {role}' in task['action']['arguments']
+    assert 'pwsh.exe' not in task['action']['arguments']
     assert task['settings']['MultipleInstances'] == 'IgnoreNew'
+    assert task['settings']['Priority'] == priority
+    assert task['settings']['RestartCount'] == 3
     assert any(t['logon'] for t in task['triggers'])
-    assert any(t['interval'] == 60 for t in task['triggers'])
+    assert any(t['interval'] == 60 for t in task['triggers']) is (role == 'dictation')
 
 
-@pytest.mark.parametrize('available', ['missing', 'alias'])
-def test_no_stable_host_fails_before_registering_tasks(tmp_path, available):
-    process = registration(tmp_path, available)
+@pytest.mark.parametrize('missing', ['base', 'launcher', 'runtime', 'service'])
+def test_missing_dependency_fails_before_registering_tasks(tmp_path, missing):
+    process = registration(tmp_path, 'dictation', missing=missing)
     assert process.returncode != 0
-    assert 'No stable PowerShell 7 entry found' in process.stderr
+    assert 'Missing background launcher dependency' in process.stderr

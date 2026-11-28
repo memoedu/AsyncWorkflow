@@ -1,8 +1,9 @@
 param([ValidateSet('server','runner','watcher','xiaomi','remnote','dashboard','mirror','dictation')][string[]]$Roles=@('runner','watcher'))
 $ErrorActionPreference='Stop'
 $serviceScript=Join-Path $PSScriptRoot 'run-service.ps1'
+$nativeScript=Join-Path $PSScriptRoot 'run-service.py'
 if(@($Roles | Where-Object {$_ -notin @('dashboard','mirror','dictation')}).Count) {
-  $runs=Invoke-RestMethod 'http://127.0.0.1:4200/api/flow_runs/filter' -Method Post -ContentType 'application/json' -Body '{"flow_runs":{"state":{"type":{"any_":["RUNNING","PENDING"]}}},"limit":100}' -TimeoutSec 15
+  $runs=Invoke-RestMethod 'http://127.0.0.1:4200/api/flow_runs/filter' -Method Post -ContentType 'application/json' -Body '{"flow_runs":{"state":{"type":{"any_":["RUNNING","PENDING","CANCELLING"]}}},"limit":100}' -TimeoutSec 15
   if(@($runs).Count){throw 'Active flows exist; retry the service reload after they finish'}
 }
 $snapshot=@(Get-CimInstance Win32_Process)
@@ -10,8 +11,10 @@ foreach($role in $Roles) {
   # Headless conhost can survive independently of its descendants. Capture
   # exact service roots before stopping the scheduled action, including orphans.
   $roots=@($snapshot | Where-Object {
-    $_.Name -eq 'pwsh.exe' -and $_.CommandLine -like "*$serviceScript*" -and
-    $_.CommandLine -match ('-Role\s+'+[regex]::Escape($role)+'(?:\s|$)')
+    ($_.Name -eq 'pwsh.exe' -and $_.CommandLine -like "*$serviceScript*" -and
+    $_.CommandLine -match ('-Role\s+'+[regex]::Escape($role)+'(?:\s|$)')) -or
+    ($_.Name -in @('python.exe','pythonw.exe') -and $_.CommandLine -like "*$nativeScript*" -and
+    $_.CommandLine -match ('--role\s+'+[regex]::Escape($role)+'(?:\s|$)'))
   })
   $owned=[Collections.Generic.HashSet[int]]::new()
   foreach($root in $roots){$null=$owned.Add([int]$root.ProcessId)}
